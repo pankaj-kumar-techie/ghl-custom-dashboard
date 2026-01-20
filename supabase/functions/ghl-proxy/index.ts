@@ -189,8 +189,6 @@ serve(async (req) => {
                     throw new Error(data.message || `GHL API Error: ${res.status}`);
                 }
                 
-                }
-                
                 result = data;
                 break;
             }

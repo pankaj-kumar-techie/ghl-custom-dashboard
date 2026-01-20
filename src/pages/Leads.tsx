@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { format } from 'date-fns';
 import { Search, Users, FileText, RefreshCw, Layers } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -33,7 +33,14 @@ export function Leads() {
   });
 
   // 1. Initial Load & Background Sync Engine
+  const syncStarted = useRef(false);
+
   useEffect(() => {
+    if (syncStarted.current) return;
+    syncStarted.current = true;
+
+    const controller = new AbortController();
+    
     const startSync = async () => {
       setSyncing(true);
       setError('');
@@ -45,11 +52,13 @@ export function Leads() {
         const [statsRes, fieldsRes] = await Promise.all([
           supabase.functions.invoke('ghl-proxy', { 
             body: { action: 'get_stats' },
-            headers: { 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` }
+            headers: { 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+            signal: controller.signal
           }),
           supabase.functions.invoke('ghl-proxy', { 
             body: { action: 'get_custom_fields' },
-            headers: { 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` }
+            headers: { 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+            signal: controller.signal
           })
         ]);
 
@@ -73,38 +82,57 @@ export function Leads() {
         let lastStartAfterId: any = null;
         const limit = 100;
 
-        const fetchBatch = async (sAfter?: any, sAfterId?: any) => {
-          const { data, error } = await supabase.functions.invoke('ghl-proxy', { 
-            body: { 
-              action: 'get_contacts', 
+        const fetchBatch = async (sAfter?: any, sAfterId?: any, retryCount = 0): Promise<any> => {
+          if (controller.signal.aborted) return { batchSize: 0 };
+
+          try {
+            const { data, error } = await supabase.functions.invoke('ghl-proxy', { 
               body: { 
-                limit, 
-                startAfter: sAfter, 
-                startAfterId: sAfterId 
-              } 
-            },
-            headers: {
-              'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+                action: 'get_contacts', 
+                body: { 
+                  limit, 
+                  startAfter: sAfter, 
+                  startAfterId: sAfterId 
+                } 
+              },
+              headers: {
+                'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+              },
+              signal: controller.signal
+            });
+
+            if (error) throw error;
+            
+            const batch = data?.contacts || [];
+            totalCount = data?.meta?.total || totalCount;
+            
+            const nextStartAfter = data?.meta?.startAfter;
+            const nextStartAfterId = data?.meta?.startAfterId;
+            
+            setAllContacts(prev => {
+              const contactMap = new Map(prev.map(c => [c.id, c]));
+              batch.forEach((c: any) => contactMap.set(c.id, c));
+              return Array.from(contactMap.values());
+            });
+            
+            setSyncProgress(prev => ({ 
+              current: Math.min(prev.current + batch.length, totalCount), 
+              total: totalCount 
+            }));
+            
+            return { batchSize: batch.length, nextStartAfter, nextStartAfterId };
+          } catch (err: any) {
+            if (err.name === 'AbortError') return { batchSize: 0 };
+            
+            // Exponential Backoff for Rate Limits or Temporary Failures
+            if (retryCount < 3) {
+              const delay = Math.pow(2, retryCount) * 1000;
+              console.warn(`Sync retry ${retryCount + 1} after ${delay}ms...`);
+              await new Promise(r => setTimeout(r, delay));
+              return fetchBatch(sAfter, sAfterId, retryCount + 1);
             }
-          });
-          if (error) throw error;
-          
-          const batch = data?.contacts || [];
-          totalCount = data?.meta?.total || totalCount;
-          
-          const nextStartAfter = data?.meta?.startAfter;
-          const nextStartAfterId = data?.meta?.startAfterId;
-          
-          // Use Map for deduplication based on contact ID
-          setAllContacts(prev => {
-            const contactMap = new Map(prev.map(c => [c.id, c]));
-            batch.forEach((c: any) => contactMap.set(c.id, c));
-            return Array.from(contactMap.values());
-          });
-          
-          setSyncProgress(prev => ({ current: Math.min(prev.current + batch.length, totalCount), total: totalCount }));
-          
-          return { batchSize: batch.length, nextStartAfter, nextStartAfterId };
+            throw err;
+          }
         };
 
         // First batch
@@ -113,26 +141,30 @@ export function Leads() {
         lastStartAfterId = first.nextStartAfterId;
 
         // Continue sync loop until all records are fetched
-        while (lastStartAfterId && lastStartAfter) {
+        while (lastStartAfterId && lastStartAfter && !controller.signal.aborted) {
            const result = await fetchBatch(lastStartAfter, lastStartAfterId);
            if (result.batchSize === 0) break;
            
            lastStartAfter = result.nextStartAfter;
            lastStartAfterId = result.nextStartAfterId;
            
-           // Minor throttle to prevent rate limiting
+           // Standard throttle: 100ms between successful batches
            await new Promise(r => setTimeout(r, 100));
         }
 
       } catch (err: any) {
+        if (err.name === 'AbortError') return;
         console.error('Local Intelligence Sync Error:', err);
         setError('Sync interrupted. Data may be partial.');
       } finally {
-        setSyncing(false);
+        if (!controller.signal.aborted) {
+          setSyncing(false);
+        }
       }
     };
 
     startSync();
+    return () => controller.abort();
   }, []);
 
   // 2. Local Intelligence: Search, Filter, Sort
