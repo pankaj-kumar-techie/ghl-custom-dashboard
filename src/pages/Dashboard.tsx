@@ -1,16 +1,16 @@
 import { useState, useEffect } from 'react';
-import { Users, Calendar, DollarSign, Briefcase, CalendarPlus, UserPlus } from 'lucide-react';
+import { Users, DollarSign, Briefcase, CalendarPlus, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 export function Dashboard() {
     const { isDemoMode } = useAuth();
     const [stats, setStats] = useState({
         totalContacts: 0,
-        upcomingAppointments: 0,
-        pipelineValue: 0,
-        openOpportunities: 0
+        totalOpportunities: 0,
+        totalValue: 0,
+        conversionRate: "0",
+        appointments: []
     });
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -19,13 +19,13 @@ export function Dashboard() {
         async function fetchStats() {
             try {
                 if (isDemoMode) {
-                    // Mock Data for Demo Mode
                     setTimeout(() => {
                         setStats({
                             totalContacts: 124,
-                            upcomingAppointments: 8,
-                            pipelineValue: 45000,
-                            openOpportunities: 12
+                            totalOpportunities: 45,
+                            totalValue: 12500,
+                            conversionRate: "24.5",
+                            appointments: []
                         });
                         setLoading(false);
                     }, 800);
@@ -40,20 +40,15 @@ export function Dashboard() {
                 if (data) {
                     setStats({
                         totalContacts: data.totalContacts || 0,
-                        upcomingAppointments: data.upcomingAppointments || 0,
-                        pipelineValue: data.pipelineValue || 0,
-                        openOpportunities: data.openOpportunities || 0
+                        totalOpportunities: data.totalOpportunities || 0,
+                        totalValue: data.totalValue || 0,
+                        conversionRate: data.conversionRate || "0",
+                        appointments: data.appointments || []
                     });
                 }
             } catch (err: any) {
-                console.error("Full dashboard error:", err);
-                if (err.message?.includes('403') || err.message?.includes('permission')) {
-                    setError("Additional permissions required. Please reconnect your account with all requested permissions.");
-                } else if (err.message?.includes('Failed to fetch') || err.message?.includes('network')) {
-                    setError("Could not connect to the server. Please check your internet connection.");
-                } else {
-                    setError("Failed to load dashboard statistics: " + (err.message || "Unknown error"));
-                }
+                console.error("Dashboard error:", err);
+                setError("Failed to load dashboard statistics.");
             } finally {
                 setLoading(false);
             }
@@ -62,110 +57,83 @@ export function Dashboard() {
     }, [isDemoMode]);
 
     const statCards = [
-        { name: 'Total Leads', value: stats.totalContacts.toLocaleString(), icon: Users, color: 'text-blue-600', bg: 'bg-blue-100 dark:bg-blue-900/20' },
-        { name: 'Appointments', value: stats.upcomingAppointments.toString(), icon: Calendar, color: 'text-green-600', bg: 'bg-green-100 dark:bg-green-900/20' },
-        { name: 'Pipeline Value', value: `$${stats.pipelineValue.toLocaleString()}`, icon: DollarSign, color: 'text-yellow-600', bg: 'bg-yellow-100 dark:bg-yellow-900/20' },
-        { name: 'Open Opportunities', value: stats.openOpportunities.toString(), icon: Briefcase, color: 'text-purple-600', bg: 'bg-purple-100 dark:bg-purple-900/20' },
+        { name: 'Total Contacts', value: stats.totalContacts.toLocaleString(), icon: Users, color: 'text-blue-600', bg: 'bg-blue-50 dark:bg-blue-900/10' },
+        { name: 'Total Value', value: `$${stats.totalValue.toLocaleString()}`, icon: DollarSign, color: 'text-green-600', bg: 'bg-green-50 dark:bg-green-900/10' },
+        { name: 'Opportunities', value: stats.totalOpportunities.toString(), icon: Briefcase, color: 'text-purple-600', bg: 'bg-purple-50 dark:bg-purple-900/10' },
+        { name: 'Win Rate', value: `${stats.conversionRate}%`, icon: CalendarPlus, color: 'text-amber-600', bg: 'bg-amber-50 dark:bg-amber-900/10' },
     ];
 
     return (
-        <div className="space-y-8">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                <h2 className="text-3xl font-bold text-gray-900 dark:text-white tracking-tight">
-                    Dashboard Overview {isDemoMode && <span className="ml-2 text-sm bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full font-medium">Demo Mode</span>}
-                </h2>
-                <div className="flex space-x-3">
-                    <Link to="/appointments" className="inline-flex items-center px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium rounded-md shadow transition-colors">
-                        <CalendarPlus className="w-4 h-4 mr-2" />
-                        Book Appointment
-                    </Link>
-                    <button className="inline-flex items-center px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-md shadow-sm transition-colors">
-                        <UserPlus className="w-4 h-4 mr-2" />
-                        Create Lead
-                    </button>
-                </div>
-            </div>
-
+        <div className="max-w-6xl mx-auto space-y-6">
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Dashboard</h2>
+            
             {error && (
-                <div className="bg-amber-50 dark:bg-amber-900/10 border-l-4 border-amber-500 p-4 rounded-md">
-                    <div className="flex">
-                        <div className="flex-shrink-0">
-                            <svg className="h-5 w-5 text-amber-500" viewBox="0 0 20 20" fill="currentColor">
-                                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                            </svg>
-                        </div>
-                        <div className="ml-3">
-                            <p className="text-sm text-amber-700 dark:text-amber-200">
-                                {error}
-                            </p>
-                        </div>
+                <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 p-6 rounded-xl flex items-start gap-4 shadow-sm">
+                    <div className="p-2 bg-red-100 dark:bg-red-900/50 rounded-full">
+                        <X className="w-5 h-5 text-red-600 dark:text-red-400" />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-red-900 dark:text-red-300">Connection Error</h3>
+                        <p className="text-red-700 dark:text-red-400 mt-1">{error}</p>
+                        <button 
+                            onClick={() => window.location.reload()}
+                            className="mt-3 text-sm font-bold text-red-700 dark:text-red-400 underline hover:no-underline"
+                        >
+                            Retry Connection
+                        </button>
                     </div>
                 </div>
             )}
 
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-                {statCards.map((item) => {
-                    const Icon = item.icon;
-                    return (
-                        <div key={item.name} className="bg-white dark:bg-gray-800 overflow-hidden shadow-sm rounded-xl border border-gray-100 dark:border-gray-700 p-6 transition-all hover:shadow-md">
-                            <div className="flex items-center">
-                                <div className={`flex-shrink-0 p-3 rounded-lg ${item.bg}`}>
-                                    <Icon className={`h-6 w-6 ${item.color}`} aria-hidden="true" />
-                                </div>
-                                <div className="ml-5 w-0 flex-1">
-                                    <dl>
-                                        <dt className="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">{item.name}</dt>
-                                        <dd>
-                                            <div className="text-2xl font-bold text-gray-900 dark:text-white mt-1">
-                                                {loading ? "..." : item.value}
-                                            </div>
-                                        </dd>
-                                    </dl>
-                                </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {statCards.map((item) => (
+                    <div key={item.name} className="bg-white dark:bg-gray-800 p-6 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm transition-transform hover:-translate-y-1">
+                        <div className="flex flex-col gap-3">
+                            <div className={`w-fit p-3 rounded-lg ${item.bg}`}>
+                                <item.icon className={`h-6 w-6 ${item.color}`} />
+                            </div>
+                            <div>
+                                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{item.name}</p>
+                                <p className="text-3xl font-extrabold text-gray-900 dark:text-white transition-all">
+                                    {loading ? <span className="animate-pulse">...</span> : item.value}
+                                </p>
                             </div>
                         </div>
-                    );
-                })}
+                    </div>
+                ))}
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Connection Status / Activity */}
-                <div className="bg-white dark:bg-gray-800 shadow-sm rounded-xl border border-gray-100 dark:border-gray-700 p-6">
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                        Recent Activity
-                    </h3>
-                    <div className="space-y-4">
-                        <div className="flex items-start pb-4 border-b border-gray-100 dark:border-gray-700 last:border-0 last:pb-0">
-                            <div className="bg-green-100 dark:bg-green-900/20 p-2 rounded-full mr-3">
-                                <Users className="w-4 h-4 text-green-600" />
-                            </div>
-                            <div>
-                                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">New Lead Created</p>
-                                <p className="text-xs text-gray-500">2 hours ago</p>
-                            </div>
-                        </div>
-                        <div className="flex items-start pb-4 border-b border-gray-100 dark:border-gray-700 last:border-0 last:pb-0">
-                            <div className="bg-blue-100 dark:bg-blue-900/20 p-2 rounded-full mr-3">
-                                <Calendar className="w-4 h-4 text-blue-600" />
-                            </div>
-                            <div>
-                                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Appointment Scheduled</p>
-                                <p className="text-xs text-gray-500">5 hours ago</p>
-                            </div>
-                        </div>
-                    </div>
+            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 overflow-hidden shadow-sm">
+                <div className="p-6 border-b border-gray-50 dark:border-gray-700">
+                    <h3 className="font-bold text-gray-900 dark:text-white">Upcoming Pipeline</h3>
                 </div>
-
-                <div className="bg-white dark:bg-gray-800 shadow-sm rounded-xl border border-gray-100 dark:border-gray-700 p-6 flex flex-col justify-center items-center text-center">
-                    <div className={`p-4 rounded-full ${isDemoMode ? 'bg-yellow-50 dark:bg-yellow-900/10' : 'bg-green-50 dark:bg-green-900/10'} mb-3`}>
-                        <div className={`w-3 h-3 rounded-full ${isDemoMode ? 'bg-yellow-500' : 'bg-green-500'} animate-pulse`}></div>
+                {loading ? (
+                    <div className="p-6 space-y-4">
+                        <div className="h-12 bg-gray-50 animate-pulse rounded" />
+                        <div className="h-12 bg-gray-50 animate-pulse rounded" />
                     </div>
-                    <h3 className="text-lg font-medium text-gray-900 dark:text-white">System Status</h3>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
-                        {isDemoMode ? "Running in Demo Mode (Mock Data)" : (loading ? "Checking connection..." : "Connected to HighLevel & Syncing")}
-                    </p>
-                </div>
+                ) : stats.appointments.length > 0 ? (
+                    <div className="divide-y divide-gray-50 dark:divide-gray-700">
+                        {stats.appointments.slice(0, 5).map((appt: any) => (
+                            <div key={appt.id} className="p-6 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-900/50 transition-colors">
+                                <div>
+                                    <p className="font-bold text-gray-900 dark:text-white">{appt.title}</p>
+                                    <p className="text-xs text-gray-500">{new Date(appt.startTime).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</p>
+                                </div>
+                                <span className={`px-2 py-1 text-[10px] font-black uppercase rounded ${appt.status === 'confirmed' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+                                    {appt.status}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                ) : (
+                    <div className="p-12 text-center text-gray-400 text-sm">
+                        No active calendar events found.
+                    </div>
+                )}
             </div>
         </div>
     );
 }
+
+

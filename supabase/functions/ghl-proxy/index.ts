@@ -112,63 +112,141 @@ serve(async (req) => {
             return res; // Return the response object, let caller handle json()
         };
 
-        // --- Handle specific Actions ---
-        if (action === "get_stats") {
-            // ... existing get_stats logic ...
-            const [contactsRes, oppsRes, apptsRes] = await Promise.all([
-                fetchGHL(`${GHL_API_BASE}/contacts/?locationId=${locationId}&limit=1`),
-                fetchGHL(`${GHL_API_BASE}/opportunities/search?locationId=${locationId}&limit=100&status=open`),
-                fetchGHL(`${GHL_API_BASE}/calendars/events?locationId=${locationId}&startTime=${Date.now()}&endTime=${Date.now() + 2592000000}`)
-            ]);
+        // --- Action Dispatcher ---
+        let result;
 
-            const contactsData = await contactsRes.json();
-            const oppsData = await oppsRes.json();
-            const apptsData = await apptsRes.json();
+        switch (action) {
+            case "get_stats": {
+                const businessId = token.company_id;
+                const isBusinessToken = token.user_type === 'Company' || token.user_type === 'Agency';
+                
+                const contactsUrl = isBusinessToken && businessId
+                    ? `${GHL_API_BASE}/contacts/business/${businessId}?locationId=${locationId}&limit=1`
+                    : `${GHL_API_BASE}/contacts/?locationId=${locationId}&limit=1`;
 
-            return new Response(JSON.stringify({
-                totalContacts: contactsData.meta?.total || 0,
-                openOpportunities: (oppsData.opportunities || []).length,
-                pipelineValue: (oppsData.opportunities || []).reduce((sum: number, opp: any) => sum + (Number(opp.monetaryValue) || 0), 0),
-                upcomingAppointments: (apptsData.events || []).length
-            }), {
-                headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-            });
+                const [contactsRes, oppsRes, apptsRes] = await Promise.all([
+                    fetchGHL(contactsUrl),
+                    fetchGHL(`${GHL_API_BASE}/opportunities/search?locationId=${locationId}&limit=100`),
+                    fetchGHL(`${GHL_API_BASE}/calendars/events?locationId=${locationId}&startTime=${Date.now() - (180 * 24 * 60 * 60 * 1000)}&endTime=${Date.now() + (180 * 24 * 60 * 60 * 1000)}`)
+                ]);
 
-        } else if (action === "get_contacts") {
-            const { limit = 20, offset = 0, query } = body || {};
-            let url = `${GHL_API_BASE}/contacts/?locationId=${locationId}&limit=${limit}&offset=${offset}`;
-            if (query) url += `&query=${encodeURIComponent(query)}`;
-            
-            const response = await fetchGHL(url);
-            const data = await response.json();
-            return new Response(JSON.stringify(data), {
-                headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-            });
+                const contactsData = await contactsRes.json();
+                const oppsData = await oppsRes.json();
+                const apptsData = await apptsRes.json();
 
-        } else if (action === "get_contact_appointments") {
-            const { contactId } = body || {};
-            if (!contactId) throw new Error("contactId is required");
-            
-            const url = `${GHL_API_BASE}/calendars/events?locationId=${locationId}&contactId=${contactId}`;
-            const response = await fetchGHL(url);
-            const data = await response.json();
-            return new Response(JSON.stringify(data), {
-                headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-            });
+                const opportunities = oppsData.opportunities || [];
+                const totalValue = opportunities.reduce((sum: number, opp: any) => sum + (Number(opp.monetaryValue) || 0), 0);
+                const wonOpps = opportunities.filter((opp: any) => opp.status === 'won');
+                const conversionRate = opportunities.length > 0 ? (wonOpps.length / opportunities.length) * 100 : 0;
 
-        } else if (endpoint) {
-            const response = await fetchGHL(`${GHL_API_BASE}${endpoint}`, {
-                method,
-                body: body ? JSON.stringify(body) : undefined
-            });
-            const data = await response.json();
-            return new Response(JSON.stringify(data), {
-                status: response.status,
-                headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-            });
+                result = {
+                    totalContacts: (isBusinessToken && businessId) ? (contactsData.count || 0) : (contactsData.meta?.total || contactsData.total || 0),
+                    totalOpportunities: opportunities.length,
+                    totalValue,
+                    conversionRate: conversionRate.toFixed(1),
+                    recentContacts: (contactsData.contacts || []).slice(0, 10),
+                    pipelineData: opportunities,
+                    appointments: apptsData.events || []
+                };
+                break;
+            }
+
+            case "get_contacts": {
+                const businessId = token.company_id;
+                const isBusinessToken = token.user_type === 'Company' || token.user_type === 'Agency';
+                
+                const { limit = 20, query, useBusinessWide = true, startAfter, startAfterId } = body || {};
+                
+                const params = new URLSearchParams();
+                params.append("limit", String(limit));
+                
+                // GHL V2 Contacts API uses cursor-based pagination
+                if (startAfter) params.append("startAfter", String(startAfter));
+                if (startAfterId) params.append("startAfterId", String(startAfterId));
+
+                if (!(isBusinessToken && businessId && useBusinessWide)) {
+                    params.append("locationId", locationId);
+                }
+                
+                if (query) params.append("query", query);
+
+                const url = isBusinessToken && businessId && useBusinessWide
+                    ? `${GHL_API_BASE}/contacts/business/${businessId}?${params.toString()}`
+                    : `${GHL_API_BASE}/contacts/?${params.toString()}`;
+                
+                console.log(`Fetching Contacts (${token.user_type}): ${url}`);
+                
+                const res = await fetchGHL(url, { method: "GET" });
+                
+                let data;
+                try {
+                    data = await res.json();
+                } catch (e) {
+                    throw new Error(`GHL returned non-JSON response (Status: ${res.status})`);
+                }
+
+                if (!res.ok) {
+                    throw new Error(data.message || `GHL API Error: ${res.status}`);
+                }
+                
+                }
+                
+                result = data;
+                break;
+            }
+
+            case "get_contact_appointments": {
+                const { contactId } = body || {};
+                if (!contactId) throw new Error("contactId is required");
+                const res = await fetchGHL(`${GHL_API_BASE}/contacts/${contactId}/appointments`);
+                result = await res.json();
+                break;
+            }
+
+            case "get_contact_detail": {
+                const { contactId } = body || {};
+                if (!contactId) throw new Error("contactId is required");
+                const res = await fetchGHL(`${GHL_API_BASE}/contacts/${contactId}`);
+                result = await res.json();
+                break;
+            }
+
+            case "get_custom_fields": {
+                const res = await fetchGHL(`${GHL_API_BASE}/locations/${locationId}/customFields`);
+                result = await res.json();
+                break;
+            }
+
+            case "test_connection": {
+                const res = await fetchGHL(`${GHL_API_BASE}/locations/${locationId}`);
+                const data = await res.json();
+                if (res.ok) {
+                    result = { success: true, location: data };
+                } else {
+                    throw new Error(data.message || "Connection failed");
+                }
+                break;
+            }
+
+            default: {
+                if (endpoint) {
+                    const res = await fetchGHL(`${GHL_API_BASE}${endpoint}`, {
+                        method,
+                        body: body ? JSON.stringify(body) : undefined
+                    });
+                    result = await res.json();
+                    return new Response(JSON.stringify(result), {
+                        status: res.status,
+                        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+                    });
+                }
+                throw new Error(`Unknown action: ${action}`);
+            }
         }
 
-        return new Response(JSON.stringify({ error: "Invalid request" }), { status: 400 });
+        return new Response(JSON.stringify(result), {
+            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
 
     } catch (error: any) {
         return new Response(JSON.stringify({ error: error.message }), {

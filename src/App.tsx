@@ -2,14 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, Link } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Layout } from './components/Layout';
-import { Dashboard } from './pages/Dashboard';
-import { Appointments } from './pages/Appointments';
 import { Leads } from './pages/Leads';
 import { supabase } from './lib/supabase';
-
-// Placeholder components for other pages
-const Opportunities = () => <h1 className="text-2xl font-bold">Opportunities</h1>;
-const Orders = () => <h1 className="text-2xl font-bold">Orders</h1>;
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isConnected, isLoading } = useAuth();
@@ -29,27 +23,47 @@ function ConnectPage() {
   const { connect, enableDemoMode } = useAuth();
 
   return (
-    <div className="flex h-screen items-center justify-center bg-gray-50 dark:bg-gray-900">
-      <div className="text-center space-y-6 max-w-md px-6">
-        <h1 className="text-4xl font-bold text-gray-900 dark:text-white">Welcome back</h1>
-        <p className="text-gray-500 dark:text-gray-400">Connect your HighLevel account to view your dashboard.</p>
+    <div className="flex h-screen items-center justify-center bg-[#fcfcfd] dark:bg-slate-950 font-sans selection:bg-blue-100 selection:text-blue-900 overflow-hidden relative">
+      {/* Premium Gradient Background Elements */}
+      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-500/5 rounded-full blur-[120px] pointer-events-none" />
+      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-emerald-500/5 rounded-full blur-[120px] pointer-events-none" />
 
-        <div className="space-y-3">
+      <div className="text-center space-y-8 max-w-lg px-8 py-16 bg-white dark:bg-slate-900/50 backdrop-blur-xl rounded-[3rem] border border-slate-100 dark:border-slate-800 shadow-2xl shadow-slate-200/50 relative z-10 animate-in fade-in zoom-in-95 duration-700">
+        <div className="w-20 h-20 bg-gradient-to-br from-blue-600 to-blue-700 rounded-3xl mx-auto flex items-center justify-center shadow-2xl shadow-blue-500/30 mb-8 transform -rotate-6 hover:rotate-0 transition-transform duration-500">
+          <span className="text-3xl font-black text-white tracking-tighter">GHL</span>
+        </div>
+
+        <div className="space-y-4">
+          <h1 className="text-5xl font-black text-slate-950 dark:text-white tracking-tighter leading-[0.95]">
+            Experience <br /><span className="text-blue-600">The Future.</span>
+          </h1>
+          <p className="text-slate-500 dark:text-slate-400 font-medium text-lg leading-relaxed max-w-sm mx-auto">
+            Bridge your HighLevel ecosystem into a high-performance custom dashboard. 
+          </p>
+        </div>
+
+        <div className="space-y-4 pt-4">
           <button
             onClick={connect}
-            className="px-6 py-3 bg-[#155eea] hover:bg-[#104ab0] text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transition-all w-full flex items-center justify-center"
+            className="group relative px-8 py-4 bg-slate-950 dark:bg-white dark:text-slate-950 text-white font-black text-sm uppercase tracking-widest rounded-2xl shadow-xl hover:shadow-2xl hover:scale-[1.02] active:scale-[0.98] transition-all w-full overflow-hidden"
           >
-            Connect with HighLevel
+            <div className="absolute inset-0 bg-blue-600 translate-y-full group-hover:translate-y-0 transition-transform duration-300 pointer-events-none" />
+            <span className="relative z-10">Connect HighLevel</span>
           </button>
 
           <button
             onClick={enableDemoMode}
-            className="px-6 py-3 bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 font-semibold rounded-lg shadow-sm hover:shadow transition-all w-full flex items-center justify-center"
+            className="px-8 py-4 bg-transparent hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500 font-black text-[10px] uppercase tracking-[0.2em] rounded-2xl transition-all w-full"
           >
-            View Demo (No Login)
+            Enter Demo Sandbox
           </button>
         </div>
-        <p className="text-xs text-gray-400">Use Demo mode to verify UI without GHL connection.</p>
+        
+        <div className="pt-8 border-t border-slate-50 dark:border-slate-800">
+            <p className="text-[10px] font-black text-slate-300 dark:text-slate-700 uppercase tracking-widest">
+                Trusted by 2,000+ HighLevel Agencies
+            </p>
+        </div>
       </div>
     </div>
   );
@@ -147,12 +161,10 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/auth/callback" element={<CallbackPage />} />
-          <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-          <Route path="/appointments" element={<ProtectedRoute><Appointments /></ProtectedRoute>} />
-          <Route path="/leads" element={<ProtectedRoute><Leads /></ProtectedRoute>} />
-          <Route path="/opportunities" element={<ProtectedRoute><Opportunities /></ProtectedRoute>} />
-          <Route path="/orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />
+          <Route path="/" element={<ProtectedRoute><Leads /></ProtectedRoute>} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+
       </BrowserRouter>
     </AuthProvider>
   );

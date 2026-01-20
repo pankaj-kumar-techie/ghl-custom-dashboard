@@ -1,336 +1,423 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { format } from 'date-fns';
-import { 
-  Users, 
-  Search, 
-  Calendar, 
-  Download, 
-  ChevronRight, 
-  Mail, 
-  Phone, 
-  X,
-  FileText,
-  Clock,
-  Filter,
-  Briefcase
-} from 'lucide-react';
+import { Search, Users, FileText, RefreshCw, Layers } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { clsx, type ClassValue } from 'clsx';
+import { twMerge } from 'tailwind-merge';
+
+function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
 
 export function Leads() {
-  const [contacts, setContacts] = useState<any[]>([]);
+  // Master Data
+  const [allContacts, setAllContacts] = useState<any[]>([]);
+  const [allAppointments, setAllAppointments] = useState<any[]>([]);
+  const [customFields, setCustomFields] = useState<any[]>([]);
+  
+  // App State
   const [searchQuery, setSearchQuery] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [filterCV, setFilterCV] = useState<'all' | 'has' | 'none'>('all');
+  const [filterSession, setFilterSession] = useState<'all' | 'has' | 'none'>('all');
+  const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
+  
+  // Sync Status
+  const [syncing, setSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState({ current: 0, total: 0 });
   const [error, setError] = useState('');
-  const [selectedContact, setSelectedContact] = useState<any>(null);
-  const [appointments, setAppointments] = useState<any[]>([]);
-  const [apptsLoading, setApptsLoading] = useState(false);
+  const [refreshingId, setRefreshingId] = useState<string | null>(null);
 
+  const [stats, setStats] = useState({
+    totalValue: 0,
+    conversionRate: "0"
+  });
+
+  // 1. Initial Load & Background Sync Engine
   useEffect(() => {
-    fetchLeads();
-  }, [searchQuery]);
+    const startSync = async () => {
+      setSyncing(true);
+      setError('');
+      
+      try {
+        setAllContacts([]); // Reset for fresh sync
+        
+        // Initial Fetch for Stats, Fields, and Batch 1
+        const [statsRes, fieldsRes] = await Promise.all([
+          supabase.functions.invoke('ghl-proxy', { 
+            body: { action: 'get_stats' },
+            headers: { 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` }
+          }),
+          supabase.functions.invoke('ghl-proxy', { 
+            body: { action: 'get_custom_fields' },
+            headers: { 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` }
+          })
+        ]);
 
-  const fetchLeads = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const { data, error } = await supabase.functions.invoke('ghl-proxy', {
-        body: {
-          action: 'get_contacts',
-          body: {
-            query: searchQuery,
-            limit: 50
-          }
+        if (statsRes.data) {
+          setAllAppointments(statsRes.data.appointments || []);
+          setStats({
+            totalValue: statsRes.data.totalValue || 0,
+            conversionRate: statsRes.data.conversionRate || "0"
+          });
+          const totalRecords = statsRes.data.totalContacts || 0;
+          setSyncProgress({ current: 0, total: totalRecords });
         }
-      });
-      if (error) throw error;
-      setContacts(data.contacts || []);
-    } catch (err: any) {
-      console.error('Error fetching leads:', err);
-      setError('Failed to load leads from HighLevel.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchContactAppointments = async (contactId: string) => {
-    setApptsLoading(true);
-    setAppointments([]);
-    try {
-      const { data, error } = await supabase.functions.invoke('ghl-proxy', {
-        body: {
-          action: 'get_contact_appointments',
-          body: { contactId }
+        
+        if (fieldsRes.data) {
+          setCustomFields(fieldsRes.data.customFields || []);
         }
-      });
-      if (error) throw error;
-      setAppointments(data.events || []);
-    } catch (err) {
-      console.error('Error fetching contact appointments:', err);
-    } finally {
-      setApptsLoading(false);
+
+        // Recursive Batch Fetching (100 per batch)
+        let totalCount = 0;
+        let lastStartAfter: any = null;
+        let lastStartAfterId: any = null;
+        const limit = 100;
+
+        const fetchBatch = async (sAfter?: any, sAfterId?: any) => {
+          const { data, error } = await supabase.functions.invoke('ghl-proxy', { 
+            body: { 
+              action: 'get_contacts', 
+              body: { 
+                limit, 
+                startAfter: sAfter, 
+                startAfterId: sAfterId 
+              } 
+            },
+            headers: {
+              'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+            }
+          });
+          if (error) throw error;
+          
+          const batch = data?.contacts || [];
+          totalCount = data?.meta?.total || totalCount;
+          
+          const nextStartAfter = data?.meta?.startAfter;
+          const nextStartAfterId = data?.meta?.startAfterId;
+          
+          // Use Map for deduplication based on contact ID
+          setAllContacts(prev => {
+            const contactMap = new Map(prev.map(c => [c.id, c]));
+            batch.forEach((c: any) => contactMap.set(c.id, c));
+            return Array.from(contactMap.values());
+          });
+          
+          setSyncProgress(prev => ({ current: Math.min(prev.current + batch.length, totalCount), total: totalCount }));
+          
+          return { batchSize: batch.length, nextStartAfter, nextStartAfterId };
+        };
+
+        // First batch
+        const first = await fetchBatch();
+        lastStartAfter = first.nextStartAfter;
+        lastStartAfterId = first.nextStartAfterId;
+
+        // Continue sync loop until all records are fetched
+        while (lastStartAfterId && lastStartAfter) {
+           const result = await fetchBatch(lastStartAfter, lastStartAfterId);
+           if (result.batchSize === 0) break;
+           
+           lastStartAfter = result.nextStartAfter;
+           lastStartAfterId = result.nextStartAfterId;
+           
+           // Minor throttle to prevent rate limiting
+           await new Promise(r => setTimeout(r, 100));
+        }
+
+      } catch (err: any) {
+        console.error('Local Intelligence Sync Error:', err);
+        setError('Sync interrupted. Data may be partial.');
+      } finally {
+        setSyncing(false);
+      }
+    };
+
+    startSync();
+  }, []);
+
+  // 2. Local Intelligence: Search, Filter, Sort
+  const findResumeValue = (contact: any) => {
+    const resumeFieldDef = customFields.find((f: any) => f.name?.toLowerCase().includes('resume'));
+    if (resumeFieldDef) {
+       const val = contact.customFields?.find((f: any) => f.id === resumeFieldDef.id || f.id === resumeFieldDef.fieldKey)?.value;
+       if (val) return val;
     }
-  };
-
-  const handleContactClick = (contact: any) => {
-    setSelectedContact(contact);
-    fetchContactAppointments(contact.id);
-  };
-
-  const getResumeLink = (contact: any) => {
-    // Custom field for Resume usually contains a URL
-    const resumeField = contact.customFields?.find((f: any) => 
-      f.id?.toLowerCase().includes('resume') || 
-      f.name?.toLowerCase().includes('resume') ||
-      (typeof f.value === 'string' && f.value.includes('http') && f.value.includes('resume'))
+    const possibleResume = contact.customFields?.find((f: any) => 
+      typeof f.value === 'string' && (f.value.includes('http') && (f.value.includes('resume') || f.value.includes('.pdf')))
     );
-    return resumeField?.value || null;
+    return possibleResume?.value || null;
+  };
+
+  const filteredAndSortedContacts = useMemo(() => {
+    let result = allContacts.filter(contact => {
+      // Global Search
+      const searchTerms = searchQuery.toLowerCase();
+      const nameMatch = `${contact.firstName} ${contact.lastName}`.toLowerCase().includes(searchTerms);
+      const emailMatch = contact.email?.toLowerCase().includes(searchTerms);
+      const phoneMatch = contact.phone?.includes(searchTerms);
+      const sourceMatch = contact.source?.toLowerCase().includes(searchTerms);
+      
+      if (searchQuery && !(nameMatch || emailMatch || phoneMatch || sourceMatch)) return false;
+
+      // CV Filter
+      const hasCV = !!findResumeValue(contact);
+      if (filterCV === 'has' && !hasCV) return false;
+      if (filterCV === 'none' && hasCV) return false;
+
+      // Session Filter
+      const hasSession = allAppointments.some(a => a.contactId === contact.id || a.email === contact.email);
+      if (filterSession === 'has' && !hasSession) return false;
+      if (filterSession === 'none' && hasSession) return false;
+
+      return true;
+    });
+
+    // Local Sort
+    if (sortConfig) {
+      const { key, direction } = sortConfig;
+      result.sort((a, b) => {
+        let aVal = a[key] || '';
+        let bVal = b[key] || '';
+        if (key === 'name') {
+          aVal = `${a.firstName} ${a.lastName}`;
+          bVal = `${b.firstName} ${b.lastName}`;
+        }
+        if (aVal < bVal) return direction === 'asc' ? -1 : 1;
+        if (aVal > bVal) return direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    return result;
+  }, [allContacts, searchQuery, filterCV, filterSession, sortConfig, allAppointments, customFields]);
+
+  const requestSort = (key: string) => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const syncContactDeep = async (contactId: string) => {
+    setRefreshingId(contactId);
+    try {
+      const { data, error } = await supabase.functions.invoke('ghl-proxy', {
+        body: { action: 'get_contact_detail', body: { contactId } },
+        headers: { 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` }
+      });
+      if (error) throw error;
+      if (data?.contact) {
+        setAllContacts(prev => prev.map(c => c.id === contactId ? { ...c, ...data.contact } : c));
+      }
+    } catch (err) {
+      console.error('Deep Sync Error:', err);
+    } finally {
+      setRefreshingId(null);
+    }
   };
 
   return (
-    <div className="space-y-6 relative h-full">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Lead Management</h2>
-          <p className="text-gray-500 dark:text-gray-400">View and manage your HighLevel contacts.</p>
+    <div className="max-w-full mx-auto space-y-6 pb-24 animate-in fade-in duration-700 selection:bg-blue-100 selection:text-blue-900 overflow-x-hidden">
+      <div className="flex flex-col md:flex-row items-stretch md:items-center gap-4 py-4 border-b border-slate-100 dark:border-slate-800">
+        <div className="relative flex-1 group">
+          <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
+          <input
+            type="text"
+            placeholder="Instant search across all records..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-11 pr-4 py-3 bg-transparent border-none text-sm font-bold text-slate-900 dark:text-white w-full focus:ring-0 outline-none placeholder:text-slate-400"
+          />
         </div>
-        
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search leads..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 pr-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm w-full md:w-64 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm"
-            />
-          </div>
-          <button 
-            onClick={fetchLeads}
-            className="p-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
-          >
-            <Filter className="w-4 h-4 text-gray-500" />
-          </button>
+
+        <div className="flex flex-wrap items-center gap-4 px-4">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-black text-slate-600 dark:text-slate-300 uppercase tracking-widest">Market Status:</span>
+              <select 
+                value={filterCV} 
+                onChange={(e) => setFilterCV(e.target.value as any)}
+                className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-4 py-2 text-xs font-black text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
+              >
+                <option value="all">Any Document</option>
+                <option value="has">CV Secured</option>
+                <option value="none">Pending File</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-black text-slate-600 dark:text-slate-300 uppercase tracking-widest">Availability:</span>
+              <select 
+                value={filterSession} 
+                onChange={(e) => setFilterSession(e.target.value as any)}
+                className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-4 py-2 text-xs font-black text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
+              >
+                <option value="all">All Sessions</option>
+                <option value="has">Booked</option>
+                <option value="none">Open Access</option>
+              </select>
+            </div>
         </div>
       </div>
 
       {error && (
-        <div className="bg-red-50 dark:bg-red-900/20 border-l-4 border-red-400 p-4 rounded-r-lg">
-          <div className="flex items-center">
-            <X className="w-5 h-5 text-red-400 mr-2" />
-            <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
-          </div>
+        <div className="mx-4 p-4 bg-rose-50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900 rounded-2xl flex items-center justify-between gap-4">
+           <div className="flex items-center gap-3 text-rose-600 font-bold text-xs uppercase tracking-widest">
+             <Layers className="w-4 h-4" />
+             {error}
+           </div>
+           <button onClick={() => window.location.reload()} className="text-[10px] font-bold text-rose-500 hover:underline">Retry Connection</button>
         </div>
       )}
 
-      {/* Leads Table */}
-      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-700">
-                <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Contact</th>
-                <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Contact Info</th>
-                <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Date Added</th>
-                <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Resume</th>
-                <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-              {loading && contacts.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-6 py-10 text-center text-gray-500">Loading leads...</td>
-                </tr>
-              )}
-              {!loading && contacts.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-6 py-10 text-center text-gray-500">No leads found.</td>
-                </tr>
-              )}
-              {contacts.map((contact) => (
-                <tr 
-                  key={contact.id} 
-                  className={`hover:bg-blue-50/50 dark:hover:bg-blue-900/10 cursor-pointer transition-colors ${selectedContact?.id === contact.id ? 'bg-blue-50 dark:bg-blue-900/20' : ''}`}
-                  onClick={() => handleContactClick(contact)}
-                >
-                  <td className="px-6 py-4">
-                    <div className="flex items-center">
-                      <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center text-blue-600 dark:text-blue-400 font-bold mr-3 shadow-sm border border-blue-200 dark:border-blue-800">
-                        {contact.firstName ? contact.firstName[0] : <Users className="w-5 h-5" />}
-                      </div>
-                      <div>
-                        <div className="font-semibold text-gray-900 dark:text-white">
-                          {contact.firstName || ''} {contact.lastName || ''}
+      {/* 2. Flat Data Grid */}
+      <div className="overflow-x-auto px-4 relative">
+        {/* Subtle Timeline Axis */}
+        <div className="absolute left-10 top-0 bottom-0 w-[1px] bg-slate-100 dark:bg-slate-800 pointer-events-none z-0" />
+        
+        <table className="w-full text-left border-collapse min-w-[1000px] relative z-10">
+          <thead>
+            <tr className="border-b border-slate-100 dark:border-slate-800">
+              <th className="py-6 font-black text-slate-400 uppercase text-[9px] tracking-[0.3em] w-16">#</th>
+              <th onClick={() => requestSort('name')} className="py-6 font-black text-slate-400 uppercase text-[9px] tracking-[0.3em] cursor-pointer group hover:text-blue-600 transition-colors">
+                <div className="flex items-center gap-2">
+                  Identity
+                  <span className={cn("transition-all duration-300 opacity-0 text-blue-600", sortConfig?.key === 'name' && "opacity-100")}>
+                    {sortConfig?.direction === 'asc' ? '↓' : '↑'}
+                  </span>
+                </div>
+              </th>
+              <th className="py-6 font-black text-slate-400 uppercase text-[9px] tracking-[0.3em]">Channel</th>
+              <th className="py-6 font-black text-slate-400 uppercase text-[9px] tracking-[0.3em]">Activity</th>
+              <th className="py-6 font-black text-slate-400 uppercase text-[9px] tracking-[0.3em] text-center w-32">Actions</th>
+              <th onClick={() => requestSort('dateAdded')} className="py-6 font-black text-slate-400 uppercase text-[9px] tracking-[0.3em] text-right cursor-pointer group hover:text-blue-600 transition-colors">
+                <div className="flex items-center justify-end gap-2">
+                  Staged
+                  <span className={cn("transition-all duration-300 opacity-0 text-blue-600", sortConfig?.key === 'dateAdded' && "opacity-100")}>
+                    {sortConfig?.direction === 'asc' ? '↓' : '↑'}
+                  </span>
+                </div>
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-50 dark:divide-slate-900">
+            {allContacts.length === 0 && syncing ? (
+              <tr><td colSpan={6} className="py-32 text-center text-slate-300 font-black uppercase text-xs tracking-[0.5em] animate-pulse">Initializing Pulse Sync...</td></tr>
+            ) : filteredAndSortedContacts.length === 0 ? (
+              <tr><td colSpan={6} className="py-32 text-center text-slate-400 font-black text-sm tracking-widest opacity-30 italic">No Matching Dataset found locally.</td></tr>
+            ) : (
+              filteredAndSortedContacts.map((contact, index) => {
+                const nextAppt = allAppointments.find(a => a.contactId === contact.id || a.email === contact.email);
+                const resumeUrl = findResumeValue(contact);
+                const isRefreshing = refreshingId === contact.id;
+                
+                return (
+                  <tr key={contact.id} className="group hover:bg-slate-50/50 dark:hover:bg-slate-900/40 transition-colors">
+                    <td className="py-8 font-black text-slate-300 dark:text-slate-800 text-[10px] tracking-tight tabular-nums">#{index + 1}</td>
+                    <td className="py-8">
+                      <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 flex items-center justify-center relative overflow-hidden group-hover:bg-blue-600 group-hover:text-white transition-all">
+                          {contact.firstName ? <span className="text-sm font-black">{contact.firstName[0].toUpperCase()}</span> : <Users className="w-4 h-4 opacity-30" />}
+                          {isRefreshing && <div className="absolute inset-0 bg-blue-600 flex items-center justify-center animate-pulse"><RefreshCw className="w-4 h-4 animate-spin" /></div>}
                         </div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400 capitalize">{contact.type || 'Lead'}</div>
+                        <div>
+                          <p className="font-extrabold text-slate-900 dark:text-white text-sm tracking-tight leading-none mb-1 uppercase group-hover:text-blue-600 transition-colors">{contact.firstName} {contact.lastName}</p>
+                          <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider opacity-60">{contact.source || 'Direct'}</span>
+                        </div>
                       </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="space-y-1">
-                      <div className="flex items-center text-sm text-gray-600 dark:text-gray-300">
-                        <Mail className="w-3.5 h-3.5 mr-2 text-gray-400" />
-                        {contact.email || 'No email'}
+                    </td>
+                    <td className="py-8">
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-slate-600 dark:text-slate-400 font-bold text-xs font-mono">{contact.email || '-'}</span>
+                        <p className="text-[9px] text-slate-400 font-black tracking-widest uppercase">{contact.phone || 'No Contact'}</p>
                       </div>
-                      <div className="flex items-center text-sm text-gray-600 dark:text-gray-300">
-                        <Phone className="w-3.5 h-3.5 mr-2 text-gray-400" />
-                        {contact.phone || 'No phone'}
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">
-                    {contact.dateAdded ? format(new Date(contact.dateAdded), 'MMM d, yyyy') : 'N/A'}
-                  </td>
-                  <td className="px-6 py-4">
-                    {getResumeLink(contact) ? (
-                      <a 
-                        href={getResumeLink(contact)} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="flex items-center text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline bg-blue-50 dark:bg-blue-900/30 px-2 py-1 rounded border border-blue-100 dark:border-blue-800 w-fit"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <Download className="w-3 h-3 mr-1" />
-                        Resume
-                      </a>
-                    ) : (
-                      <span className="text-xs text-gray-400">None</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4">
-                    <ChevronRight className={`w-5 h-5 text-gray-300 transition-transform ${selectedContact?.id === contact.id ? 'rotate-90 text-blue-500' : ''}`} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    </td>
+                    <td className="py-8">
+                      {nextAppt ? (
+                        <div className="flex items-center gap-2 group/msg">
+                          <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.5)]" />
+                          <div className="flex flex-col">
+                            <span className="text-[11px] font-black text-slate-900 dark:text-slate-100 tracking-tight">{format(new Date(nextAppt.startTime), 'MMM d, h:mm a')}</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="h-0.5 w-6 bg-slate-100 dark:bg-slate-800 rounded-full opacity-40" />
+                      )}
+                    </td>
+                    <td className="py-8">
+                       <div className="flex items-center justify-center gap-2">
+                         {resumeUrl ? (
+                            <a href={resumeUrl} target="_blank" rel="noreferrer" title="Download CV" className="p-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 text-slate-900 dark:text-white rounded-xl hover:bg-blue-600 hover:text-white transition-all">
+                              <FileText className="w-4 h-4" />
+                            </a>
+                         ) : (
+                            <div className="p-2.5 opacity-20"><FileText className="w-4 h-4" /></div>
+                         )}
+                         <button onClick={() => syncContactDeep(contact.id)} title="Recursive Profile Sync" className={cn("p-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 text-slate-400 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-all", isRefreshing && "animate-spin text-blue-600")}>
+                           <RefreshCw className="w-4 h-4" />
+                         </button>
+                       </div>
+                    </td>
+                    <td className="py-8 text-right">
+                      <p className="text-xs font-black text-slate-900 dark:text-white tracking-widest leading-none mb-1 tabular-nums lowercase">
+                        {contact.dateAdded ? format(new Date(contact.dateAdded), 'yyyy') : '-'}
+                      </p>
+                      <span className="text-[9px] font-black text-slate-400 opacity-50 uppercase tracking-[0.2em]">
+                        {contact.dateAdded ? format(new Date(contact.dateAdded), 'MMM dd') : '-'}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* 3. Global Command Strip (Bottom Fixed Minimalism) */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-[95%] max-w-[1200px] h-16 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl flex items-center justify-between px-6 sm:px-10 group/dock overflow-hidden">
+        <div className="flex items-center gap-8 sm:gap-14 overflow-x-auto no-scrollbar">
+          <div className="flex flex-col">
+            <span className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-0.5">Network</span>
+            <p className="text-sm font-black text-slate-900 dark:text-white tracking-tighter tabular-nums">
+              {syncProgress.current.toLocaleString()}
+              <span className="text-slate-400 font-bold mx-1">/</span>
+              {syncProgress.total.toLocaleString()}
+            </p>
+          </div>
+          <div className="h-6 w-[1px] bg-slate-100 dark:bg-slate-800 hidden md:block" />
+          <div className="flex flex-col">
+            <span className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-0.5">Pipeline</span>
+            <p className="text-sm font-black text-emerald-600 dark:text-emerald-400 tracking-tighter tabular-nums">${stats.totalValue.toLocaleString()}</p>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-0.5">Efficiency</span>
+            <p className="text-sm font-black text-blue-600 dark:text-blue-400 tracking-tighter tabular-nums">{stats.conversionRate}%</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4">
+           {syncing ? (
+              <div className="flex items-center gap-3">
+                <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-ping" />
+                <span className="text-[10px] font-black text-blue-500 uppercase tracking-widest animate-pulse">Pulse Sync Active</span>
+              </div>
+           ) : (
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 rounded-lg border border-emerald-500/20">
+                <div className="w-1 h-1 bg-emerald-500 rounded-full" />
+                <span className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-widest">Database Synced</span>
+              </div>
+           )}
         </div>
       </div>
 
-      {/* Slide-over Detail Panel */}
-      {selectedContact && (
-        <div className="fixed inset-y-0 right-0 w-full md:w-96 bg-white dark:bg-gray-800 shadow-2xl z-50 border-l border-gray-200 dark:border-gray-700 transform transition-transform duration-300 ease-in-out">
-          <div className="h-full flex flex-col">
-            <div className="p-6 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-900/50">
-              <h3 className="text-xl font-bold text-gray-900 dark:text-white">Lead Details</h3>
-              <button 
-                onClick={() => setSelectedContact(null)}
-                className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-colors"
-              >
-                <X className="w-6 h-6 text-gray-500" />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-6 space-y-8">
-              {/* Profile Overview */}
-              <div className="text-center">
-                <div className="w-20 s-20 mx-auto rounded-full bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center text-blue-600 dark:text-blue-400 text-3xl font-bold mb-4 shadow-md border-2 border-white dark:border-gray-800">
-                  {selectedContact.firstName ? selectedContact.firstName[0] : <Users className="w-10 h-10" />}
-                </div>
-                <h4 className="text-lg font-bold text-gray-900 dark:text-white">
-                  {selectedContact.firstName} {selectedContact.lastName}
-                </h4>
-                <p className="text-sm text-gray-500 dark:text-gray-400">ID: {selectedContact.id}</p>
-              </div>
-
-              {/* Contact Specific Info */}
-              <div className="space-y-4 bg-gray-50 dark:bg-gray-900/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
-                <div className="flex items-center text-sm">
-                  <Mail className="w-4 h-4 text-gray-400 mr-3" />
-                  <span className="text-gray-900 dark:text-gray-200">{selectedContact.email || 'N/A'}</span>
-                </div>
-                <div className="flex items-center text-sm">
-                  <Phone className="w-4 h-4 text-gray-400 mr-3" />
-                  <span className="text-gray-900 dark:text-gray-200">{selectedContact.phone || 'N/A'}</span>
-                </div>
-                <div className="flex items-center text-sm">
-                  <Clock className="w-4 h-4 text-gray-400 mr-3" />
-                  <span className="text-gray-900 dark:text-gray-200 font-medium">Added: </span>
-                  <span className="ml-1 text-gray-600 dark:text-gray-400">
-                    {selectedContact.dateAdded ? format(new Date(selectedContact.dateAdded), 'PPP') : 'N/A'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Appointments Section */}
-              <div className="space-y-4">
-                <h5 className="font-bold text-gray-900 dark:text-white flex items-center">
-                  <Calendar className="w-4 h-4 mr-2 text-blue-500" />
-                  Recent Appointments
-                </h5>
-                
-                {apptsLoading ? (
-                  <div className="animate-pulse space-y-3">
-                    <div className="h-12 bg-gray-100 dark:bg-gray-700 rounded-lg"></div>
-                    <div className="h-12 bg-gray-100 dark:bg-gray-700 rounded-lg"></div>
-                  </div>
-                ) : appointments.length > 0 ? (
-                  <div className="space-y-3">
-                    {appointments.map((appt: any) => (
-                      <div key={appt.id} className="p-3 bg-white dark:bg-gray-700 rounded-lg border border-gray-100 dark:border-gray-600 shadow-sm">
-                        <div className="font-semibold text-sm text-gray-900 dark:text-white truncate">{appt.title}</div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400 flex justify-between mt-1">
-                          <span>{format(new Date(appt.startTime), 'MMM d, h:mm a')}</span>
-                          <span className="text-blue-500 font-medium capitalize">{appt.status}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-center py-6 bg-gray-50 dark:bg-gray-900/20 rounded-lg border border-dashed border-gray-200 dark:border-gray-700">
-                    <Clock className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-                    <p className="text-xs text-gray-400">No appointments found.</p>
-                  </div>
-                )}
-              </div>
-
-              {/* Custom Fields (Optional Diagnostic) */}
-              <div className="space-y-4">
-                <h5 className="font-bold text-gray-900 dark:text-white flex items-center">
-                  <Briefcase className="w-4 h-4 mr-2 text-blue-500" />
-                  Custom Fields
-                </h5>
-                <div className="grid grid-cols-1 gap-2">
-                  {selectedContact.customFields?.length > 0 ? (
-                    selectedContact.customFields.map((field: any, idx: number) => (
-                      <div key={idx} className="flex flex-col p-2 bg-gray-50 dark:bg-gray-900/20 rounded border border-gray-100 dark:border-gray-700">
-                        <span className="text-[10px] text-gray-400 truncate uppercase">{field.name || field.id}</span>
-                        <span className="text-xs text-gray-700 dark:text-gray-300 truncate">{String(field.value)}</span>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-xs text-gray-400 italic text-center py-4">No custom fields found.</p>
-                  )}
-                </div>
-              </div>
-            </div>
-            
-            <div className="p-6 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
-              <button 
-                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-500/20 transition-all active:scale-95 disabled:opacity-50"
-                disabled={!getResumeLink(selectedContact)}
-              >
-                {getResumeLink(selectedContact) ? (
-                  <a 
-                    href={getResumeLink(selectedContact)} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-center w-full"
-                  >
-                    <Download className="w-5 h-5 mr-2" />
-                    Download Resume
-                  </a>
-                ) : (
-                  <span className="flex items-center justify-center">
-                    <FileText className="w-5 h-5 mr-2 text-white/50" />
-                    No Resume Available
-                  </span>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
+
+
+
+
+
+
+
