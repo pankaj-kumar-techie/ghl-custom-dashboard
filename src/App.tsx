@@ -61,8 +61,12 @@ function CallbackPage() {
   const [errorMsg, setErrorMsg] = useState('');
   const location = useLocation();
 
+  const hasExchanged = React.useRef(false);
+
   useEffect(() => {
     const exchangeCode = async () => {
+      if (hasExchanged.current) return;
+      
       const params = new URLSearchParams(location.search);
       const code = params.get('code');
 
@@ -73,6 +77,7 @@ function CallbackPage() {
       }
 
       try {
+        hasExchanged.current = true;
         const { error } = await supabase.functions.invoke('ghl-oauth', {
           body: { code },
         });
@@ -80,12 +85,14 @@ function CallbackPage() {
         if (error) throw error;
 
         // Wait a bit and check connection
+        await new Promise(resolve => setTimeout(resolve, 1000));
         await checkConnection();
         setStatus('success');
       } catch (err: any) {
         console.error("Full exchange error:", err);
         setStatus('error');
         setErrorMsg(err.message || 'Failed to connect to authentication service. Please check your internet and try again.');
+        hasExchanged.current = false; // Allow retry if it failed
       }
     };
 
