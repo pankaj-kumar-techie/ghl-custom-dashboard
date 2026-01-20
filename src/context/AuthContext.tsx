@@ -36,9 +36,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             console.log('Checking GHL connection status (Attempt ' + (retryCount + 1) + ')...');
 
             // First, check if there are any tokens in our Supabase table
-            const { data, error, count } = await supabase
+            const { data, error } = await supabase
                 .from('ghl_tokens')
-                .select('location_id', { count: 'exact' })
+                .select('location_id')
                 .limit(1);
 
             if (error) {

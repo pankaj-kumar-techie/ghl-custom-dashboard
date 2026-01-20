@@ -85,7 +85,7 @@ function CallbackPage() {
         exchangedCodes.add(code);
         console.log("Exchanging GHL code:", code.substring(0, 5) + "...");
         
-        const { data, error } = await supabase.functions.invoke('ghl-oauth', {
+        const { error } = await supabase.functions.invoke('ghl-oauth', {
           body: { code },
         });
 
