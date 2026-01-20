@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Users, Calendar, DollarSign, Briefcase, Plus, CalendarPlus, UserPlus } from 'lucide-react';
+import { Users, Calendar, DollarSign, Briefcase, CalendarPlus, UserPlus } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
