@@ -33,13 +33,14 @@ export function Leads() {
   });
 
   // 1. Initial Load & Background Sync Engine
-  const syncStarted = useRef(false);
+  const syncLock = useRef(false);
 
   useEffect(() => {
-    if (syncStarted.current) return;
-    syncStarted.current = true;
+    if (syncLock.current) return;
+    syncLock.current = true;
 
     const controller = new AbortController();
+    const signal = controller.signal;
     
     const startSync = async () => {
       setSyncing(true);
@@ -48,21 +49,33 @@ export function Leads() {
       try {
         setAllContacts([]); // Reset for fresh sync
         
+        console.log('Starting Initial Load (Stats & Fields)...');
         // Initial Fetch for Stats, Fields, and Batch 1
         const [statsRes, fieldsRes] = await Promise.all([
           supabase.functions.invoke('ghl-proxy', { 
-            body: { action: 'get_stats' },
-            headers: { 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
-            signal: controller.signal
+            body: { action: 'get_stats' }
           }),
           supabase.functions.invoke('ghl-proxy', { 
-            body: { action: 'get_custom_fields' },
-            headers: { 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
-            signal: controller.signal
+            body: { action: 'get_custom_fields' }
           })
         ]);
 
+        if (statsRes.error) {
+          if (signal.aborted) return;
+          console.error('Stats Fetch Error Detail:', {
+            error: statsRes.error,
+            message: statsRes.error.message,
+            name: statsRes.error.name
+          });
+          throw new Error(`Failed to fetch dashboard stats: ${statsRes.error.message}`);
+        }
+        if (fieldsRes.error) {
+          console.error('Fields Fetch Error:', fieldsRes.error);
+          // Non-critical, but log it
+        }
+
         if (statsRes.data) {
+          console.log('Stats received:', statsRes.data);
           setAllAppointments(statsRes.data.appointments || []);
           setStats({
             totalValue: statsRes.data.totalValue || 0,
@@ -73,6 +86,7 @@ export function Leads() {
         }
         
         if (fieldsRes.data) {
+          console.log('Custom fields received:', fieldsRes.data.customFields?.length || 0);
           setCustomFields(fieldsRes.data.customFields || []);
         }
 
@@ -94,25 +108,25 @@ export function Leads() {
                   startAfter: sAfter, 
                   startAfterId: sAfterId 
                 } 
-              },
-              headers: {
-                'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
-              },
-              signal: controller.signal
+              }
             });
 
             if (error) throw error;
             
             const batch = data?.contacts || [];
-            totalCount = data?.meta?.total || totalCount;
+            const count = data?.count || data?.meta?.total || totalCount;
+            totalCount = count;
+
+            console.log(`Batch received: ${batch.length} contacts. Total in system: ${totalCount}`);
             
             const nextStartAfter = data?.meta?.startAfter;
             const nextStartAfterId = data?.meta?.startAfterId;
             
             setAllContacts(prev => {
-              const contactMap = new Map(prev.map(c => [c.id, c]));
-              batch.forEach((c: any) => contactMap.set(c.id, c));
-              return Array.from(contactMap.values());
+                console.log(`Updating local state. Previous: ${prev.length}, New: ${batch.length}`);
+                const contactMap = new Map(prev.map(c => [c.id, c]));
+                batch.forEach((c: any) => contactMap.set(c.id, c));
+                return Array.from(contactMap.values());
             });
             
             setSyncProgress(prev => ({ 
@@ -136,9 +150,11 @@ export function Leads() {
         };
 
         // First batch
+        console.log('Fetching first contact batch...');
         const first = await fetchBatch();
         lastStartAfter = first.nextStartAfter;
         lastStartAfterId = first.nextStartAfterId;
+        console.log('First batch complete. Next cursor:', { lastStartAfter, lastStartAfterId });
 
         // Continue sync loop until all records are fetched
         while (lastStartAfterId && lastStartAfter && !controller.signal.aborted) {
@@ -153,18 +169,26 @@ export function Leads() {
         }
 
       } catch (err: any) {
-        if (err.name === 'AbortError') return;
+        if (signal.aborted || err.name === 'AbortError') return;
         console.error('Local Intelligence Sync Error:', err);
         setError('Sync interrupted. Data may be partial.');
       } finally {
-        if (!controller.signal.aborted) {
+        if (!signal.aborted) {
           setSyncing(false);
+        }
+        // If aborted, we might want to allow a future sync? 
+        // In strict mode, we actually want the first one to just die and let the second one run?
+        // Wait, the guard prevents the second one.
+        if (signal.aborted) {
+          syncLock.current = false;
         }
       }
     };
 
     startSync();
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+    };
   }, []);
 
   // 2. Local Intelligence: Search, Filter, Sort

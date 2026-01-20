@@ -114,6 +114,7 @@ serve(async (req) => {
 
         // --- Action Dispatcher ---
         let result;
+        console.log(`Executing action: ${action} for location: ${locationId}`);
 
         switch (action) {
             case "get_stats": {
@@ -124,15 +125,26 @@ serve(async (req) => {
                     ? `${GHL_API_BASE}/contacts/business/${businessId}?locationId=${locationId}&limit=1`
                     : `${GHL_API_BASE}/contacts/?locationId=${locationId}&limit=1`;
 
+                console.log(`Fetching stats from: ${contactsUrl}`);
+
                 const [contactsRes, oppsRes, apptsRes] = await Promise.all([
                     fetchGHL(contactsUrl),
                     fetchGHL(`${GHL_API_BASE}/opportunities/search?locationId=${locationId}&limit=100`),
                     fetchGHL(`${GHL_API_BASE}/calendars/events?locationId=${locationId}&startTime=${Date.now() - (180 * 24 * 60 * 60 * 1000)}&endTime=${Date.now() + (180 * 24 * 60 * 60 * 1000)}`)
                 ]);
 
-                const contactsData = await contactsRes.json();
-                const oppsData = await oppsRes.json();
-                const apptsData = await apptsRes.json();
+                // Safe parsing helper
+                const safeJson = async (res: Response) => {
+                    const text = await res.text();
+                    try { return JSON.parse(text); } catch (e) { 
+                        console.error("Failed to parse JSON:", text.slice(0, 100));
+                        return {}; 
+                    }
+                };
+
+                const contactsData = await safeJson(contactsRes);
+                const oppsData = await safeJson(oppsRes);
+                const apptsData = await safeJson(apptsRes);
 
                 const opportunities = oppsData.opportunities || [];
                 const totalValue = opportunities.reduce((sum: number, opp: any) => sum + (Number(opp.monetaryValue) || 0), 0);
@@ -148,6 +160,7 @@ serve(async (req) => {
                     pipelineData: opportunities,
                     appointments: apptsData.events || []
                 };
+                console.log(`Stats compiled: ${result.totalContacts} contacts found.`);
                 break;
             }
 
