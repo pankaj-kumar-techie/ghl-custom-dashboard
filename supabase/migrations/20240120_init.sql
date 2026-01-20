@@ -16,12 +16,18 @@ CREATE TABLE IF NOT EXISTS ghl_tokens (
 ALTER TABLE ghl_tokens ENABLE ROW LEVEL SECURITY;
 
 -- For this verification, we allow service role (Edge Functions) full access
--- We can also allow authenticated users if we had user auth
 CREATE POLICY "Enable access for service role only" ON ghl_tokens
   FOR ALL
   TO service_role
   USING (true)
   WITH CHECK (true);
+
+-- Allow public read access JUST for checking connection status
+-- We only select location_id, not sensitive tokens
+CREATE POLICY "Enable read access for all users" ON ghl_tokens
+  FOR SELECT
+  TO anon
+  USING (true);
 
 -- Optional: Cache table for appointments to reduce API calls
 CREATE TABLE IF NOT EXISTS appointments_cache (

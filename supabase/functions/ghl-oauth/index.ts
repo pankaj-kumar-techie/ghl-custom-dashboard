@@ -50,12 +50,14 @@ serve(async (req) => {
             throw new Error("Missing environment variables in Supabase");
         }
 
-        console.log("Exchanging code for token with:", {
-            clientId: clientId,
-            redirectUri: redirectUri,
+        console.log("Token Exchange Diagnostics:", {
+            clientId: `[${clientId}]`,
+            clientIdLength: clientId.length,
+            redirectUri: `[${redirectUri}]`,
+            redirectUriLength: redirectUri?.length || 0,
             codeLength: code?.length,
-            // Log first and last 3 chars of secret for verification without exposing it fully
-            secretSnippet: `${clientSecret.substring(0, 3)}...${clientSecret.substring(clientSecret.length - 3)}`
+            secretSnippet: `${clientSecret.substring(0, 3)}...${clientSecret.substring(clientSecret.length - 3)}`,
+            secretLength: clientSecret.length
         });
 
         // Exchange code for token

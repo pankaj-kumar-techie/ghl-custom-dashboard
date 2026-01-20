@@ -31,18 +31,23 @@ serve(async (req) => {
             .from("ghl_tokens")
             .select("*")
             .order("updated_at", { ascending: false })
-            .limit(1)
-            .single();
+            .limit(1);
 
-        if (tokenError || !tokens) {
-            return new Response(JSON.stringify({ error: "No connected GHL account found" }), {
+        const token = tokens && tokens.length > 0 ? tokens[0] : null;
+
+        if (tokenError || !token) {
+            console.error("No connected GHL account found in DB:", tokenError);
+            return new Response(JSON.stringify({ 
+                error: "No connected GHL account found",
+                details: tokenError 
+            }), {
                 status: 401,
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
             });
         }
 
-        let accessToken = tokens.access_token;
-        const locationId = tokens.location_id;
+        let accessToken = token.access_token;
+        const locationId = token.location_id;
 
         // Helper to make authenticated requests with auto-refresh
         const fetchGHL = async (url: string, options: any = {}): Promise<any> => {

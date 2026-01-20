@@ -22,7 +22,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         checkConnection();
     }, []);
 
-    const checkConnection = async () => {
+    const checkConnection = async (retryCount = 0) => {
         try {
             // Check for demo mode
             const demo = localStorage.getItem('ghl_demo_mode');
@@ -33,19 +33,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 return;
             }
 
+            console.log('Checking GHL connection status (Attempt ' + (retryCount + 1) + ')...');
+
             // First, check if there are any tokens in our Supabase table
-            const { data, error } = await supabase
+            const { data, error, count } = await supabase
                 .from('ghl_tokens')
-                .select('location_id')
+                .select('location_id', { count: 'exact' })
                 .limit(1);
 
-            if (data && data.length > 0) {
+            if (error) {
+                console.error('Database connection check failed:', {
+                    message: error.message,
+                    hint: error.hint,
+                    details: error.details,
+                    code: error.code
+                });
+                
+                if (error.code === 'PGRST116') {
+                    // This is "no rows found" - not a real error
+                    setIsConnected(false);
+                } else if (error.message?.includes('policy') || error.code === '42501') {
+                    console.error('CRITICAL: RLS Policy is blocking the connection check. Please run the SQL migration!');
+                    setIsConnected(false);
+                } else if (retryCount < 2) {
+                    // Retry once for transient network errors
+                    await new Promise(r => setTimeout(r, 1000));
+                    return checkConnection(retryCount + 1);
+                }
+            } else if (data && data.length > 0) {
+                console.log('GHL Connection verified successfully for location:', data[0].location_id);
                 setIsConnected(true);
             } else {
+                console.log('No GHL connection found in database.');
                 setIsConnected(false);
             }
-        } catch (error) {
-            console.error('Error checking connection:', error);
+        } catch (error: any) {
+            console.error('Unexpected error checking connection:', error);
+            setIsConnected(false);
         } finally {
             setIsLoading(false);
         }
