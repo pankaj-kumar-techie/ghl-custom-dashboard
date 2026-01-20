@@ -34,11 +34,11 @@ serve(async (req) => {
             });
         }
 
-        const clientId = Deno.env.get("GHL_CLIENT_ID");
-        const clientSecret = Deno.env.get("GHL_CLIENT_SECRET");
-        const supabaseUrl = Deno.env.get("SUPABASE_URL");
-        const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-        const redirectUri = Deno.env.get("GHL_REDIRECT_URI");
+        const clientId = Deno.env.get("GHL_CLIENT_ID")?.trim();
+        const clientSecret = Deno.env.get("GHL_CLIENT_SECRET")?.trim();
+        const supabaseUrl = Deno.env.get("SUPABASE_URL")?.trim();
+        const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim();
+        const redirectUri = Deno.env.get("GHL_REDIRECT_URI")?.trim();
 
         if (!clientId || !clientSecret || !supabaseUrl || !supabaseKey) {
             console.error("Missing environment variables:", {
@@ -51,9 +51,11 @@ serve(async (req) => {
         }
 
         console.log("Exchanging code for token with:", {
-            clientId,
-            redirectUri,
-            codeLength: code?.length
+            clientId: clientId,
+            redirectUri: redirectUri,
+            codeLength: code?.length,
+            // Log first and last 3 chars of secret for verification without exposing it fully
+            secretSnippet: `${clientSecret.substring(0, 3)}...${clientSecret.substring(clientSecret.length - 3)}`
         });
 
         // Exchange code for token

@@ -55,51 +55,74 @@ function ConnectPage() {
   );
 }
 
+const exchangedCodes = new Set<string>();
+
 function CallbackPage() {
   const { isConnected, checkConnection } = useAuth();
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
   const [errorMsg, setErrorMsg] = useState('');
   const location = useLocation();
 
-  const hasExchanged = React.useRef(false);
-
   useEffect(() => {
     const exchangeCode = async () => {
-      if (hasExchanged.current) return;
-      
       const params = new URLSearchParams(location.search);
       const code = params.get('code');
 
       if (!code) {
-        setStatus('error');
-        setErrorMsg('No authorization code found.');
+        if (status === 'loading') {
+          setStatus('error');
+          setErrorMsg('No authorization code found.');
+        }
+        return;
+      }
+
+      if (exchangedCodes.has(code)) {
+        console.log("Code already being exchanged or failed, skipping duplicate call:", code.substring(0, 5) + "...");
         return;
       }
 
       try {
-        hasExchanged.current = true;
-        const { error } = await supabase.functions.invoke('ghl-oauth', {
+        exchangedCodes.add(code);
+        console.log("Exchanging GHL code:", code.substring(0, 5) + "...");
+        
+        const { data, error } = await supabase.functions.invoke('ghl-oauth', {
           body: { code },
         });
 
-        if (error) throw error;
+        if (error) {
+          console.error("Edge function error response:", error);
+          throw error;
+        }
+
+        console.log("Token exchange successful, checking connection...");
 
         // Wait a bit and check connection
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 1500));
         await checkConnection();
         setStatus('success');
       } catch (err: any) {
-        console.error("Full exchange error:", err);
+        console.error("Full exchange error details:", err);
         setStatus('error');
-        setErrorMsg(err.message || 'Failed to connect to authentication service. Please check your internet and try again.');
-        hasExchanged.current = false; // Allow retry if it failed
+        
+        let message = 'Failed to connect to authentication service.';
+        if (err.message?.includes('invalid_grant')) {
+          message = 'The authorization code is invalid or has expired. Please try connecting again.';
+        } else if (err.status === 400) {
+          message = 'Authentication failed (400). This code may have already been used.';
+        } else if (err.message) {
+          message = err.message;
+        }
+        
+        setErrorMsg(message);
+        // We DO NOT reset exchangedCodes here because once a code is tried, 
+        // it's usually invalid for reuse anyway.
       }
     };
 
-    if (!isConnected) {
+    if (!isConnected && status === 'loading') {
       exchangeCode();
     }
-  }, [location, isConnected, checkConnection]);
+  }, [location, isConnected, checkConnection, status]);
 
   if (isConnected || status === 'success') {
     return <Navigate to="/" replace />;
