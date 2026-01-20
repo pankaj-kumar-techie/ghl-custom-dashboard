@@ -83,9 +83,9 @@ function CallbackPage() {
         await checkConnection();
         setStatus('success');
       } catch (err: any) {
-        console.error("Exchange error:", err);
+        console.error("Full exchange error:", err);
         setStatus('error');
-        setErrorMsg(err.message || 'Failed to exchange token');
+        setErrorMsg(err.message || 'Failed to connect to authentication service. Please check your internet and try again.');
       }
     };
 

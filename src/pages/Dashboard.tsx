@@ -46,11 +46,13 @@ export function Dashboard() {
                     });
                 }
             } catch (err: any) {
-                console.error("Failed to load dashboard stats", err);
+                console.error("Full dashboard error:", err);
                 if (err.message?.includes('403') || err.message?.includes('permission')) {
                     setError("Additional permissions required. Please reconnect your account with all requested permissions.");
+                } else if (err.message?.includes('Failed to fetch') || err.message?.includes('network')) {
+                    setError("Could not connect to the server. Please check your internet connection.");
                 } else {
-                    setError("Failed to load dashboard statistics. Please try refreshing.");
+                    setError("Failed to load dashboard statistics: " + (err.message || "Unknown error"));
                 }
             } finally {
                 setLoading(false);

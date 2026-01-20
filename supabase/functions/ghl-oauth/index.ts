@@ -38,33 +38,51 @@ serve(async (req) => {
         const clientSecret = Deno.env.get("GHL_CLIENT_SECRET");
         const supabaseUrl = Deno.env.get("SUPABASE_URL");
         const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+        const redirectUri = Deno.env.get("GHL_REDIRECT_URI");
 
         if (!clientId || !clientSecret || !supabaseUrl || !supabaseKey) {
-            throw new Error("Missing environment variables");
+            console.error("Missing environment variables:", {
+                hasClientId: !!clientId,
+                hasClientSecret: !!clientSecret,
+                hasSupabaseUrl: !!supabaseUrl,
+                hasSupabaseKey: !!supabaseKey
+            });
+            throw new Error("Missing environment variables in Supabase");
         }
 
+        console.log("Exchanging code for token with:", {
+            clientId,
+            redirectUri,
+            codeLength: code?.length
+        });
+
         // Exchange code for token
-        const body = new URLSearchParams({
+        const tokenParams = new URLSearchParams({
             client_id: clientId,
             client_secret: clientSecret,
             grant_type: "authorization_code",
             code: code,
-            redirect_uri: Deno.env.get("GHL_REDIRECT_URI") || "", // e.g. https://<project>.supabase.co/functions/v1/ghl-oauth is unlikely, usually frontend handles redirect, then calls this with code? 
-            // Actually, usually frontend gets the code, then calls THIS function to exchange it.
-            // Let's assume frontend calls this function passing the code.
+            redirect_uri: redirectUri || "",
         });
 
-        console.log("Exchanging code for token...");
         const tokenRes = await fetch(GHL_TOKEN_URL, {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: body.toString(),
+            body: tokenParams.toString(),
         });
 
         const tokenData = await tokenRes.json();
 
         if (!tokenRes.ok) {
-            console.error("Token exchange failed:", tokenData);
+            console.error("GHL Token Exchange Failed:", {
+                status: tokenRes.status,
+                data: tokenData,
+                sentParams: {
+                    clientId,
+                    redirectUri,
+                    codeLength: code?.length
+                }
+            });
             return new Response(JSON.stringify(tokenData), {
                 status: tokenRes.status,
                 headers: { "Content-Type": "application/json" },
