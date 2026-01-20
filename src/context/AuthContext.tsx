@@ -33,12 +33,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 return;
             }
 
-            // In a real app, check if we have a valid token in our DB for this user/session
-            await supabase.auth.getSession();
+            // First, check if there are any tokens in our Supabase table
+            const { data, error } = await supabase
+                .from('ghl_tokens')
+                .select('location_id')
+                .limit(1);
 
-            // For this demo, we check local storage
-            const storedToken = localStorage.getItem('ghl_connected');
-            setIsConnected(!!storedToken);
+            if (data && data.length > 0) {
+                setIsConnected(true);
+            } else {
+                setIsConnected(false);
+            }
         } catch (error) {
             console.error('Error checking connection:', error);
         } finally {

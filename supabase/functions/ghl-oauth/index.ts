@@ -71,7 +71,13 @@ serve(async (req) => {
             body: tokenParams.toString(),
         });
 
-        const tokenData = await tokenRes.json();
+        const contentType = tokenRes.headers.get("content-type");
+        let tokenData;
+        if (contentType && contentType.includes("application/json")) {
+            tokenData = await tokenRes.json();
+        } else {
+            tokenData = { error: "Non-JSON response", raw: await tokenRes.text() };
+        }
 
         if (!tokenRes.ok) {
             console.error("GHL Token Exchange Failed:", {
@@ -83,9 +89,16 @@ serve(async (req) => {
                     codeLength: code?.length
                 }
             });
-            return new Response(JSON.stringify(tokenData), {
+            return new Response(JSON.stringify({ 
+                error: "Token exchange failed", 
+                details: tokenData,
+                status: tokenRes.status 
+            }), {
                 status: tokenRes.status,
-                headers: { "Content-Type": "application/json" },
+                headers: { 
+                    "Content-Type": "application/json",
+                    "Access-Control-Allow-Origin": "*",
+                },
             });
         }
 
@@ -119,10 +132,17 @@ serve(async (req) => {
             },
         });
 
-    } catch (error) {
-        return new Response(JSON.stringify({ error: error.message }), {
+    } catch (error: any) {
+        console.error("Critical Function Error:", error);
+        return new Response(JSON.stringify({ 
+            error: error.message,
+            stack: error.stack 
+        }), {
             status: 500,
-            headers: { "Content-Type": "application/json" },
+            headers: { 
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+            },
         });
     }
 });
