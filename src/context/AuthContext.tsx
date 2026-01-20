@@ -23,7 +23,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
             // In a real app, check if we have a valid token in our DB for this user/session
             // For this demo, we might check local storage or a simple edge function call
-            const { data: { session } } = await supabase.auth.getSession();
+            await supabase.auth.getSession();
             // For now, we'll simulate connection check.
             // Replace this with actual check logic later.
             const storedToken = localStorage.getItem('ghl_connected');

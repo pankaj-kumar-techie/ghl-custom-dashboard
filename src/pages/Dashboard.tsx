@@ -1,4 +1,3 @@
-import React from 'react';
 import { Users, Calendar, DollarSign, Briefcase } from 'lucide-react';
 
 const stats = [

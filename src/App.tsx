@@ -63,7 +63,7 @@ function CallbackPage() {
 
       try {
         // Call Supabase Edge Function to exchange code
-        const { data, error } = await supabase.functions.invoke('ghl-oauth', {
+        const { error } = await supabase.functions.invoke('ghl-oauth', {
           body: { code }, // We might need to handle this as URL params depending on how we wrote the function. 
           // The function expects: `url.searchParams.get("code")`
           // So we should append it to the URL query string of the function call?
