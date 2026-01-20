@@ -51,7 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const clientId = import.meta.env.VITE_GHL_CLIENT_ID;
         const redirectUri = import.meta.env.VITE_GHL_REDIRECT_URI;
         const scope = "appointments.readonly calendars.readonly contacts.readonly opportunities.readonly users.readonly conversations.readonly";
-        const authUrl = `https://marketplace.leadconnectorhq.com/oauth/chooselocation?response_type=code&redirect_uri=${redirectUri}&client_id=${clientId}&scope=${scope}`;
+        const authUrl = `https://marketplace.leadconnectorhq.com/oauth/chooselocation?response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&client_id=${encodeURIComponent(clientId)}&scope=${scope}`;
 
         window.location.href = authUrl;
     };
