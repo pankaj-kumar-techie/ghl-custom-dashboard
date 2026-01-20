@@ -48,11 +48,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const connect = () => {
         // Redirect to GHL OAuth
-        const clientId = import.meta.env.VITE_GHL_CLIENT_ID;
-        const redirectUri = import.meta.env.VITE_GHL_REDIRECT_URI;
+        const clientId = (import.meta.env.VITE_GHL_CLIENT_ID || '').trim();
+        const redirectUri = (import.meta.env.VITE_GHL_REDIRECT_URI || '').trim();
         const scope = "appointments.readonly calendars.readonly contacts.readonly opportunities.readonly users.readonly conversations.readonly";
         const authUrl = `https://marketplace.leadconnectorhq.com/oauth/chooselocation?response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&client_id=${encodeURIComponent(clientId)}&scope=${scope}`;
 
+        console.log('Connecting to GHL:', { clientId, redirectUri, authUrl });
         window.location.href = authUrl;
     };
 
