@@ -66,30 +66,44 @@ serve(async (req) => {
             let res = await makeRequest(accessToken);
 
             if (res.status === 401) {
-                console.log("Token expired, refreshing...");
+                console.log("Token expired (401), attempting to refresh...");
+                
+                const clientId = (Deno.env.get("GHL_CLIENT_ID") || "").trim();
+                const clientSecret = (Deno.env.get("GHL_CLIENT_SECRET") || "").trim();
+
                 const refreshRes = await fetch("https://services.leadconnectorhq.com/oauth/token", {
                     method: "POST",
                     headers: { "Content-Type": "application/x-www-form-urlencoded" },
                     body: new URLSearchParams({
-                        client_id: Deno.env.get("GHL_CLIENT_ID") || "",
-                        client_secret: Deno.env.get("GHL_CLIENT_SECRET") || "",
+                        client_id: clientId,
+                        client_secret: clientSecret,
                         grant_type: "refresh_token",
-                        refresh_token: tokens.refresh_token,
+                        refresh_token: token.refresh_token,
                     }).toString(),
                 });
 
                 const refreshData = await refreshRes.json();
-                if (!refreshRes.ok) throw new Error("Token refresh failed");
+                
+                if (!refreshRes.ok) {
+                    console.error("GHL Token Refresh Failed:", {
+                        status: refreshRes.status,
+                        error: refreshData,
+                        message: refreshData.error_description || refreshData.error
+                    });
+                    throw new Error(`Token refresh failed: ${refreshData.error_description || refreshData.error || 'Unknown error'}`);
+                }
+
+                console.log("Token refreshed successfully.");
 
                 // Update DB and local variable
                 accessToken = refreshData.access_token;
-                tokens.refresh_token = refreshData.refresh_token;
+                token.refresh_token = refreshData.refresh_token;
                 await supabase.from("ghl_tokens").update({
                     access_token: refreshData.access_token,
                     refresh_token: refreshData.refresh_token,
                     expires_in: refreshData.expires_in,
                     updated_at: new Date().toISOString(),
-                }).eq("id", tokens.id);
+                }).eq("id", token.id);
 
                 // Retry
                 res = await makeRequest(accessToken);
@@ -100,46 +114,48 @@ serve(async (req) => {
 
         // --- Handle specific Actions ---
         if (action === "get_stats") {
-            // Parallel fetch for dashboard stats
-            const now = new Date();
-            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-            const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString();
-
+            // ... existing get_stats logic ...
             const [contactsRes, oppsRes, apptsRes] = await Promise.all([
-                // 1. Total Contacts (just need meta)
                 fetchGHL(`${GHL_API_BASE}/contacts/?locationId=${locationId}&limit=1`),
-
-                // 2. Opportunities (for Revenue & Count) - fetching 100 recent
                 fetchGHL(`${GHL_API_BASE}/opportunities/search?locationId=${locationId}&limit=100&status=open`),
-
-                // 3. Appointments (This Month)
-                fetchGHL(`${GHL_API_BASE}/calendars/events?locationId=${locationId}&startTime=${Date.now()}&endTime=${Date.now() + 2592000000}`) // next 30 days roughly
+                fetchGHL(`${GHL_API_BASE}/calendars/events?locationId=${locationId}&startTime=${Date.now()}&endTime=${Date.now() + 2592000000}`)
             ]);
 
             const contactsData = await contactsRes.json();
             const oppsData = await oppsRes.json();
             const apptsData = await apptsRes.json();
 
-            // Calculate Metrics
-            const totalContacts = contactsData.meta?.total || 0;
-
-            const opportunities = oppsData.opportunities || [];
-            const openOpportunities = opportunities.length;
-            const totalValue = opportunities.reduce((sum: number, opp: any) => sum + (Number(opp.monetaryValue) || 0), 0);
-
-            const events = apptsData.events || [];
-            const upcomingAppointments = events.length;
-
             return new Response(JSON.stringify({
-                totalContacts,
-                openOpportunities,
-                pipelineValue: totalValue,
-                upcomingAppointments
+                totalContacts: contactsData.meta?.total || 0,
+                openOpportunities: (oppsData.opportunities || []).length,
+                pipelineValue: (oppsData.opportunities || []).reduce((sum: number, opp: any) => sum + (Number(opp.monetaryValue) || 0), 0),
+                upcomingAppointments: (apptsData.events || []).length
             }), {
                 headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
             });
 
-            // --- Handle Generic Proxy ---
+        } else if (action === "get_contacts") {
+            const { limit = 20, offset = 0, query } = body || {};
+            let url = `${GHL_API_BASE}/contacts/?locationId=${locationId}&limit=${limit}&offset=${offset}`;
+            if (query) url += `&query=${encodeURIComponent(query)}`;
+            
+            const response = await fetchGHL(url);
+            const data = await response.json();
+            return new Response(JSON.stringify(data), {
+                headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+            });
+
+        } else if (action === "get_contact_appointments") {
+            const { contactId } = body || {};
+            if (!contactId) throw new Error("contactId is required");
+            
+            const url = `${GHL_API_BASE}/calendars/events?locationId=${locationId}&contactId=${contactId}`;
+            const response = await fetchGHL(url);
+            const data = await response.json();
+            return new Response(JSON.stringify(data), {
+                headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+            });
+
         } else if (endpoint) {
             const response = await fetchGHL(`${GHL_API_BASE}${endpoint}`, {
                 method,
@@ -154,7 +170,7 @@ serve(async (req) => {
 
         return new Response(JSON.stringify({ error: "Invalid request" }), { status: 400 });
 
-    } catch (error) {
+    } catch (error: any) {
         return new Response(JSON.stringify({ error: error.message }), {
             status: 500,
             headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },

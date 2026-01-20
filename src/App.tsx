@@ -4,10 +4,10 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
 import { Appointments } from './pages/Appointments';
+import { Leads } from './pages/Leads';
 import { supabase } from './lib/supabase';
 
 // Placeholder components for other pages
-const Leads = () => <h1 className="text-2xl font-bold">Leads</h1>;
 const Opportunities = () => <h1 className="text-2xl font-bold">Opportunities</h1>;
 const Orders = () => <h1 className="text-2xl font-bold">Orders</h1>;
 
