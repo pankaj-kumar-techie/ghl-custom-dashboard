@@ -15,14 +15,7 @@ serve(async (req) => {
     }
 
     try {
-        const { endpoint, method = "GET", body } = await req.json();
-
-        if (!endpoint) {
-            return new Response(JSON.stringify({ error: "No endpoint provided" }), {
-                status: 400,
-                headers: { "Content-Type": "application/json" },
-            });
-        }
+        const { endpoint, method = "GET", body, action } = await req.json();
 
         const supabaseUrl = Deno.env.get("SUPABASE_URL");
         const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -33,9 +26,7 @@ serve(async (req) => {
 
         const supabase = createClient(supabaseUrl, supabaseKey);
 
-        // Fetch the stored token
-        // In a real app we'd need to know WHICH location/user. 
-        // For single tenant, just get the first one or latest updated.
+        // Fetch the stored token (Get latest connected account)
         const { data: tokens, error: tokenError } = await supabase
             .from("ghl_tokens")
             .select("*")
@@ -51,82 +42,117 @@ serve(async (req) => {
         }
 
         let accessToken = tokens.access_token;
+        const locationId = tokens.location_id;
 
-        // Check if we need to refresh (simple check, assume expires_in is seconds)
-        // Actually we should store 'expires_at' calc. 
-        // efficient way: just try call, if 401, refresh. 
-        // Or if we know it's old (updated_at + expires_in < now).
-        // For simplicity: Try call, if 401, refresh and retry.
-
-        let response = await fetch(`${GHL_API_BASE}${endpoint}`, {
-            method,
-            headers: {
-                "Authorization": `Bearer ${accessToken}`,
-                "Version": "2021-07-28",
-                "Content-Type": "application/json",
-            },
-            body: body ? JSON.stringify(body) : undefined,
-        });
-
-        if (response.status === 401) {
-            console.log("Token expired, refreshing...");
-            // Refresh flow
-            const refreshRes = await fetch("https://services.leadconnectorhq.com/oauth/token", {
-                method: "POST",
-                headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                body: new URLSearchParams({
-                    client_id: Deno.env.get("GHL_CLIENT_ID") || "",
-                    client_secret: Deno.env.get("GHL_CLIENT_SECRET") || "",
-                    grant_type: "refresh_token",
-                    refresh_token: tokens.refresh_token,
-                }).toString(),
-            });
-
-            const refreshData = await refreshRes.json();
-
-            if (!refreshRes.ok) {
-                console.error("Refresh failed:", refreshData);
-                return new Response(JSON.stringify({ error: "Token refresh failed. Please reconnect." }), {
-                    status: 401,
-                    headers: { "Content-Type": "application/json" },
+        // Helper to make authenticated requests with auto-refresh
+        const fetchGHL = async (url: string, options: any = {}): Promise<any> => {
+            const makeRequest = async (token: string) => {
+                return fetch(url, {
+                    ...options,
+                    headers: {
+                        ...options.headers,
+                        "Authorization": `Bearer ${token}`,
+                        "Version": "2021-07-28",
+                        "Content-Type": "application/json",
+                    },
                 });
+            };
+
+            let res = await makeRequest(accessToken);
+
+            if (res.status === 401) {
+                console.log("Token expired, refreshing...");
+                const refreshRes = await fetch("https://services.leadconnectorhq.com/oauth/token", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                    body: new URLSearchParams({
+                        client_id: Deno.env.get("GHL_CLIENT_ID") || "",
+                        client_secret: Deno.env.get("GHL_CLIENT_SECRET") || "",
+                        grant_type: "refresh_token",
+                        refresh_token: tokens.refresh_token,
+                    }).toString(),
+                });
+
+                const refreshData = await refreshRes.json();
+                if (!refreshRes.ok) throw new Error("Token refresh failed");
+
+                // Update DB and local variable
+                accessToken = refreshData.access_token;
+                tokens.refresh_token = refreshData.refresh_token;
+                await supabase.from("ghl_tokens").update({
+                    access_token: refreshData.access_token,
+                    refresh_token: refreshData.refresh_token,
+                    expires_in: refreshData.expires_in,
+                    updated_at: new Date().toISOString(),
+                }).eq("id", tokens.id);
+
+                // Retry
+                res = await makeRequest(accessToken);
             }
 
-            // Update DB
-            accessToken = refreshData.access_token;
-            await supabase.from("ghl_tokens").update({
-                access_token: refreshData.access_token,
-                refresh_token: refreshData.refresh_token,
-                expires_in: refreshData.expires_in, // seconds
-                updated_at: new Date().toISOString(),
-            }).eq("id", tokens.id);
+            return res; // Return the response object, let caller handle json()
+        };
 
-            // Retry original request
-            response = await fetch(`${GHL_API_BASE}${endpoint}`, {
+        // --- Handle specific Actions ---
+        if (action === "get_stats") {
+            // Parallel fetch for dashboard stats
+            const now = new Date();
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+            const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString();
+
+            const [contactsRes, oppsRes, apptsRes] = await Promise.all([
+                // 1. Total Contacts (just need meta)
+                fetchGHL(`${GHL_API_BASE}/contacts/?locationId=${locationId}&limit=1`),
+
+                // 2. Opportunities (for Revenue & Count) - fetching 100 recent
+                fetchGHL(`${GHL_API_BASE}/opportunities/search?locationId=${locationId}&limit=100&status=open`),
+
+                // 3. Appointments (This Month)
+                fetchGHL(`${GHL_API_BASE}/calendars/events?locationId=${locationId}&startTime=${Date.now()}&endTime=${Date.now() + 2592000000}`) // next 30 days roughly
+            ]);
+
+            const contactsData = await contactsRes.json();
+            const oppsData = await oppsRes.json();
+            const apptsData = await apptsRes.json();
+
+            // Calculate Metrics
+            const totalContacts = contactsData.meta?.total || 0;
+
+            const opportunities = oppsData.opportunities || [];
+            const openOpportunities = opportunities.length;
+            const totalValue = opportunities.reduce((sum: number, opp: any) => sum + (Number(opp.monetaryValue) || 0), 0);
+
+            const events = apptsData.events || [];
+            const upcomingAppointments = events.length;
+
+            return new Response(JSON.stringify({
+                totalContacts,
+                openOpportunities,
+                pipelineValue: totalValue,
+                upcomingAppointments
+            }), {
+                headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+            });
+
+            // --- Handle Generic Proxy ---
+        } else if (endpoint) {
+            const response = await fetchGHL(`${GHL_API_BASE}${endpoint}`, {
                 method,
-                headers: {
-                    "Authorization": `Bearer ${accessToken}`,
-                    "Version": "2021-07-28",
-                    "Content-Type": "application/json",
-                },
-                body: body ? JSON.stringify(body) : undefined,
+                body: body ? JSON.stringify(body) : undefined
+            });
+            const data = await response.json();
+            return new Response(JSON.stringify(data), {
+                status: response.status,
+                headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
             });
         }
 
-        const data = await response.json();
-
-        return new Response(JSON.stringify(data), {
-            status: response.status,
-            headers: {
-                "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*",
-            },
-        });
+        return new Response(JSON.stringify({ error: "Invalid request" }), { status: 400 });
 
     } catch (error) {
         return new Response(JSON.stringify({ error: error.message }), {
             status: 500,
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
         });
     }
 });

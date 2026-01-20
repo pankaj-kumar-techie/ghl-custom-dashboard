@@ -4,7 +4,9 @@ import { supabase } from '../lib/supabase';
 interface AuthContextType {
     isConnected: boolean;
     isLoading: boolean;
+    isDemoMode: boolean;
     connect: () => void;
+    enableDemoMode: () => void;
     disconnect: () => void;
     checkConnection: () => Promise<void>;
 }
@@ -14,6 +16,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [isConnected, setIsConnected] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
+    const [isDemoMode, setIsDemoMode] = useState(false);
 
     useEffect(() => {
         checkConnection();
@@ -21,11 +24,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const checkConnection = async () => {
         try {
+            // Check for demo mode
+            const demo = localStorage.getItem('ghl_demo_mode');
+            if (demo === 'true') {
+                setIsDemoMode(true);
+                setIsConnected(true);
+                setIsLoading(false);
+                return;
+            }
+
             // In a real app, check if we have a valid token in our DB for this user/session
-            // For this demo, we might check local storage or a simple edge function call
             await supabase.auth.getSession();
-            // For now, we'll simulate connection check.
-            // Replace this with actual check logic later.
+
+            // For this demo, we check local storage
             const storedToken = localStorage.getItem('ghl_connected');
             setIsConnected(!!storedToken);
         } catch (error) {
@@ -45,13 +56,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         window.location.href = authUrl;
     };
 
+    const enableDemoMode = () => {
+        localStorage.setItem('ghl_demo_mode', 'true');
+        setIsDemoMode(true);
+        setIsConnected(true);
+    };
+
     const disconnect = async () => {
         localStorage.removeItem('ghl_connected');
+        localStorage.removeItem('ghl_demo_mode');
         setIsConnected(false);
+        setIsDemoMode(false);
     };
 
     return (
-        <AuthContext.Provider value={{ isConnected, isLoading, connect, disconnect, checkConnection }}>
+        <AuthContext.Provider value={{ isConnected, isLoading, isDemoMode, connect, enableDemoMode, disconnect, checkConnection }}>
             {children}
         </AuthContext.Provider>
     );

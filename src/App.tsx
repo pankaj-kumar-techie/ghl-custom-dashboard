@@ -26,19 +26,30 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 }
 
 function ConnectPage() {
-  const { connect } = useAuth();
+  const { connect, enableDemoMode } = useAuth();
 
   return (
     <div className="flex h-screen items-center justify-center bg-gray-50 dark:bg-gray-900">
       <div className="text-center space-y-6 max-w-md px-6">
         <h1 className="text-4xl font-bold text-gray-900 dark:text-white">Welcome back</h1>
         <p className="text-gray-500 dark:text-gray-400">Connect your HighLevel account to view your dashboard.</p>
-        <button
-          onClick={connect}
-          className="px-6 py-3 bg-[#155eea] hover:bg-[#104ab0] text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transition-all w-full flex items-center justify-center"
-        >
-          Connect with HighLevel
-        </button>
+
+        <div className="space-y-3">
+          <button
+            onClick={connect}
+            className="px-6 py-3 bg-[#155eea] hover:bg-[#104ab0] text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transition-all w-full flex items-center justify-center"
+          >
+            Connect with HighLevel
+          </button>
+
+          <button
+            onClick={enableDemoMode}
+            className="px-6 py-3 bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 font-semibold rounded-lg shadow-sm hover:shadow transition-all w-full flex items-center justify-center"
+          >
+            View Demo (No Login)
+          </button>
+        </div>
+        <p className="text-xs text-gray-400">Use Demo mode to verify UI without GHL connection.</p>
       </div>
     </div>
   );
@@ -62,31 +73,9 @@ function CallbackPage() {
       }
 
       try {
-        // Call Supabase Edge Function to exchange code
         const { error } = await supabase.functions.invoke('ghl-oauth', {
-          body: { code }, // We might need to handle this as URL params depending on how we wrote the function. 
-          // The function expects: `url.searchParams.get("code")`
-          // So we should append it to the URL query string of the function call?
-          // Supabase invoke passes body as JSON usually.
-          // Let's check how I wrote the function: 
-          // `const url = new URL(req.url); const code = url.searchParams.get("code");`
-          // Ah, I wrote it to expect query param.
+          body: { code },
         });
-
-        // Correction: invoke() sends POST by default with JSON body. 
-        // My function expects GET with query param OR I should update function to read from body.
-        // I should probably update the function or change how I call it. 
-        // Changing call to pass raw URL is harder with client.invoke?
-        // Actually client.invoke supports 'method' and 'headers'. 
-        // But to pass Query params to Edge Function via invoke is:
-        // invoke('ghl-oauth?code=' + code) -- this works if I append to function name? No.
-
-        // Let's try calling fetch directly to be safe, or fix function.
-        // Fixing function to use JSON body is cleaner for POST. 
-        // But OAuth callback *from GHL* is GET.
-        // But *react* is calling the function. So I can choose. POST is better.
-        // I will update the function in next step to support JSON body code. 
-        // For now, let's assume I'll fix the function.
 
         if (error) throw error;
 
